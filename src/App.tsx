@@ -869,7 +869,7 @@ function Admin({ onToast }) {
 function Friends({ user, onToast, onMessage }) {
   const [matches, setMatches] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState(null);
+  const [expanded, setExpanded] = useState(null);
 
   useEffect(() => {
     apiFetch("/matches").then(data => {
@@ -883,7 +883,7 @@ function Friends({ user, onToast, onMessage }) {
   return (
     <div>
       <h2 className="page-title">👫 Friends</h2>
-      <p className="page-sub">Your study partners</p>
+      <p className="page-sub">Your study partners — tap a card to see full profile</p>
 
       {matches.length === 0 && (
         <div className="card" style={{ textAlign:"center", padding:"3rem", color:"var(--muted)" }}>
@@ -894,43 +894,55 @@ function Friends({ user, onToast, onMessage }) {
       )}
 
       <div className="grid-2">
-        {matches.map(m => (
-          <div key={m.match_id} className="card" style={{ cursor:"pointer", transition:"transform 0.15s", padding:0, overflow:"hidden" }}
-            onClick={() => setSelected(selected?.match_id === m.match_id ? null : m)}>
-            <div style={{ height:60, background:`linear-gradient(135deg, ${userColor(m.id)} 0%, #1e293b 100%)` }} />
-            <div style={{ padding:"0 1rem 1rem" }}>
-              <div style={{ display:"flex", alignItems:"flex-end", gap:"0.75rem", marginTop:-24, marginBottom:"0.75rem" }}>
-                <div className="match-avatar" style={{ background:userColor(m.id), width:52, height:52, fontSize:"1.2rem", border:"3px solid var(--card)", flexShrink:0 }}>
-                  {m.photo ? <img src={m.photo} alt={m.name} style={{ width:"100%", height:"100%", objectFit:"cover", borderRadius:"50%" }} /> : (m.initials || getInitials(m.name))}
-                </div>
-                <div style={{ paddingBottom:"0.2rem" }}>
-                  <div style={{ fontWeight:700, fontSize:"1rem" }}>{m.name}</div>
-                  <div style={{ fontSize:"0.8rem", color:"var(--muted)" }}>📍 {m.college}</div>
-                </div>
-              </div>
-
-              {selected?.match_id === m.match_id && (
-                <div style={{ borderTop:"1px solid var(--border)", paddingTop:"0.75rem", marginTop:"0.25rem" }}>
-                  {m.style && <div style={{ marginBottom:"0.4rem" }}><span className="tag tag-style">{m.style}</span></div>}
-                  {m.subjects?.length > 0 && (
-                    <div style={{ display:"flex", flexWrap:"wrap", gap:"0.3rem", marginBottom:"0.75rem" }}>
-                      {m.subjects.map(s => <span key={s} className="tag">{s}</span>)}
-                    </div>
-                  )}
-                  <div style={{ display:"flex", gap:"0.5rem" }}>
-                    <button className="btn btn-primary btn-sm" style={{ flex:1 }} onClick={e => { e.stopPropagation(); onMessage(m); }}>
-                      💬 Message
-                    </button>
+        {matches.map(m => {
+          const isOpen = expanded === m.match_id;
+          return (
+            <div key={m.match_id} className="card" style={{ padding:0, overflow:"hidden" }}>
+              <div style={{ height:70, background:`linear-gradient(135deg, ${userColor(m.id)} 0%, #1e293b 100%)` }} />
+              <div style={{ padding:"0 1rem 1rem" }}>
+                <div style={{ display:"flex", alignItems:"flex-end", gap:"0.75rem", marginTop:-30, marginBottom:"0.6rem" }}>
+                  <div style={{ width:60, height:60, borderRadius:"50%", background:userColor(m.id), display:"flex", alignItems:"center", justifyContent:"center", fontSize:"1.4rem", fontWeight:700, color:"#fff", border:"3px solid var(--card)", flexShrink:0, overflow:"hidden" }}>
+                    {m.photo ? <img src={m.photo} alt={m.name} style={{ width:"100%", height:"100%", objectFit:"cover" }} /> : (m.initials || getInitials(m.name))}
                   </div>
+                  <div style={{ paddingBottom:"0.2rem", flex:1 }}>
+                    <div style={{ fontWeight:700, fontSize:"1.05rem" }}>{m.name}</div>
+                    <div style={{ fontSize:"0.8rem", color:"var(--muted)" }}>📍 {m.college || "Unknown"}</div>
+                  </div>
+                  <button onClick={() => setExpanded(isOpen ? null : m.match_id)}
+                    style={{ background:"var(--cream)", border:"1.5px solid var(--border)", borderRadius:8, padding:"0.3rem 0.7rem", fontSize:"0.78rem", cursor:"pointer", fontWeight:600, color:"var(--ink)", marginBottom:"0.2rem", flexShrink:0 }}>
+                    {isOpen ? "▲ Hide" : "▼ View"}
+                  </button>
                 </div>
-              )}
 
-              {selected?.match_id !== m.match_id && (
-                <div style={{ fontSize:"0.78rem", color:"var(--muted)", textAlign:"center" }}>Tap to view profile</div>
-              )}
+                {isOpen && (
+                  <div style={{ borderTop:"1px solid var(--border)", paddingTop:"0.75rem", marginBottom:"0.75rem" }}>
+                    {m.style && (
+                      <div style={{ marginBottom:"0.5rem" }}>
+                        <div style={{ fontSize:"0.72rem", fontWeight:600, color:"var(--muted)", textTransform:"uppercase", letterSpacing:"0.5px", marginBottom:"0.25rem" }}>Study Style</div>
+                        <span className="tag tag-style">{m.style}</span>
+                      </div>
+                    )}
+                    {m.subjects?.length > 0 && (
+                      <div style={{ marginBottom:"0.5rem" }}>
+                        <div style={{ fontSize:"0.72rem", fontWeight:600, color:"var(--muted)", textTransform:"uppercase", letterSpacing:"0.5px", marginBottom:"0.25rem" }}>Subjects</div>
+                        <div style={{ display:"flex", flexWrap:"wrap", gap:"0.3rem" }}>
+                          {m.subjects.map(s => <span key={s} className="tag">{s}</span>)}
+                        </div>
+                      </div>
+                    )}
+                    {!m.style && !m.subjects?.length && (
+                      <div style={{ color:"var(--muted)", fontSize:"0.85rem", marginBottom:"0.5rem" }}>No extra info yet</div>
+                    )}
+                  </div>
+                )}
+
+                <button className="btn btn-primary btn-sm" style={{ width:"100%", marginTop:"0.25rem" }} onClick={() => onMessage(m)}>
+                  💬 Message
+                </button>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
