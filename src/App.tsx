@@ -684,25 +684,37 @@ function Profile({ user, setUser, onToast }) {
 }
 
 function StudyTools({ onToast }) {
+  const MODES = [
+    { id:"focus25",  label:"🍅 Focus 25m",  secs:25*60,  type:"focus" },
+    { id:"focus55",  label:"🔥 Focus 55m",  secs:55*60,  type:"focus" },
+    { id:"focus99",  label:"⚡ Focus 99m",  secs:99*60,  type:"focus" },
+    { id:"break5",   label:"☕ Break 5m",   secs:5*60,   type:"break" },
+    { id:"break15",  label:"🌿 Break 15m",  secs:15*60,  type:"break" },
+  ];
+  const [modeId, setModeId] = useState("focus25");
   const [secs, setSecs] = useState(25*60);
   const [running, setRunning] = useState(false);
-  const [mode, setMode] = useState("focus");
   const [goals, setGoals] = useState([]);
   const [newGoal, setNewGoal] = useState("");
-  const total = mode==="focus" ? 25*60 : 5*60;
+  const curMode = MODES.find(m => m.id === modeId) || MODES[0];
+  const total = curMode.secs;
   const prog  = ((total-secs)/total)*100;
   useEffect(() => {
     if (!running) return;
     const t = setInterval(() => {
       setSecs(p => {
-        if (p <= 1) { setRunning(false); onToast(mode==="focus"?"Focus done! 🎉 Take a break":"Break over! Back to work 💪","success"); return mode==="focus"?5*60:25*60; }
+        if (p <= 1) {
+          setRunning(false);
+          onToast(curMode.type==="focus" ? "Focus done! 🎉 Take a break" : "Break over! Back to work 💪", "success");
+          return total;
+        }
         return p-1;
       });
     }, 1000);
     return () => clearInterval(t);
-  }, [running, mode]);
+  }, [running, modeId]);
   const fmt = (s) => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
-  const switchMode = (m) => { setMode(m); setSecs(m==="focus"?25*60:5*60); setRunning(false); };
+  const switchMode = (id) => { const m = MODES.find(x=>x.id===id); setModeId(id); setSecs(m.secs); setRunning(false); };
   const addGoal = () => { if (!newGoal.trim()) return; setGoals(p=>[...p,{id:Date.now(),text:newGoal,done:false}]); setNewGoal(""); };
   return (
     <div>
@@ -710,14 +722,24 @@ function StudyTools({ onToast }) {
       <p className="page-sub">Stay focused and productive</p>
       <div className="grid-2" style={{ maxWidth:800 }}>
         <div className="card" style={{ textAlign:"center" }}>
-          <div style={{ display:"flex", gap:"0.5rem", justifyContent:"center", marginBottom:"0.5rem" }}>
-            <div className={`filter-chip ${mode==="focus"?"active":""}`} onClick={() => switchMode("focus")}>🍅 Focus 25m</div>
-            <div className={`filter-chip ${mode==="break"?"active":""}`} onClick={() => switchMode("break")}>☕ Break 5m</div>
+          <div style={{ marginBottom:"0.75rem" }}>
+            <div style={{ fontSize:"0.72rem", fontWeight:600, color:"var(--muted)", textTransform:"uppercase", letterSpacing:"0.5px", marginBottom:"0.4rem" }}>Focus</div>
+            <div style={{ display:"flex", gap:"0.4rem", justifyContent:"center", flexWrap:"wrap", marginBottom:"0.5rem" }}>
+              {MODES.filter(m=>m.type==="focus").map(m => (
+                <div key={m.id} className={`filter-chip ${modeId===m.id?"active":""}`} onClick={() => switchMode(m.id)}>{m.label}</div>
+              ))}
+            </div>
+            <div style={{ fontSize:"0.72rem", fontWeight:600, color:"var(--muted)", textTransform:"uppercase", letterSpacing:"0.5px", marginBottom:"0.4rem" }}>Break</div>
+            <div style={{ display:"flex", gap:"0.4rem", justifyContent:"center", flexWrap:"wrap" }}>
+              {MODES.filter(m=>m.type==="break").map(m => (
+                <div key={m.id} className={`filter-chip ${modeId===m.id?"active":""}`} onClick={() => switchMode(m.id)}>{m.label}</div>
+              ))}
+            </div>
           </div>
           <div className="timer-circle" style={{"--prog":prog}}>{fmt(secs)}</div>
           <div className="timer-controls">
             <button className="timer-btn" style={{ background:"var(--ink)", color:"var(--paper)" }} onClick={() => setRunning(p=>!p)}>{running ? "⏸ Pause" : "▶ Start"}</button>
-            <button className="timer-btn" style={{ background:"var(--cream)", border:"1.5px solid var(--border)" }} onClick={() => { setRunning(false); setSecs(mode==="focus"?25*60:5*60); }}>↺ Reset</button>
+            <button className="timer-btn" style={{ background:"var(--cream)", border:"1.5px solid var(--border)" }} onClick={() => { setRunning(false); setSecs(curMode.secs); }}>↺ Reset</button>
           </div>
         </div>
         <div className="card">
