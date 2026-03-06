@@ -757,7 +757,7 @@ function Rating({ user, onToast }) {
   const [submitting, setSubmitting] = useState(false);
   useEffect(() => {
     (async () => {
-      try { const d = await apiFetch("/matches"); setMatches(d); if(d.length>0) setSelected(d[0].id); }
+      try { const d = await apiFetch("/matches"); if(Array.isArray(d)){ setMatches(d); if(d.length>0) setSelected(String(d[0].id)); } }
       catch {}
       setLoading(false);
     })();
@@ -787,7 +787,7 @@ function Rating({ user, onToast }) {
       <div className="card" style={{ maxWidth:480 }}>
         <div className="form-group">
           <label>Select Study Partner</label>
-          <select value={selected} onChange={e=>{ setSelected(Number(e.target.value)); setSubmitted(false); setRatings({punctuality:0,helpfulness:0,focus:0}); }}>
+          <select value={selected} onChange={e=>{ setSelected(e.target.value); setSubmitted(false); setRatings({punctuality:0,helpfulness:0,focus:0}); }}>
             {matches.map(m=><option key={m.match_id} value={m.id}>{m.name}</option>)}
           </select>
         </div>
