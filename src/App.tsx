@@ -196,6 +196,11 @@ const style = `
   .lofi-sub { font-size: 0.75rem; color: #888; }
   .lofi-btn { width: 40px; height: 40px; border-radius: 50%; background: var(--accent); border: none; color: #fff; font-size: 1.1rem; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
   .member-chip { display: flex; align-items: center; gap: 0.4rem; background: rgba(255,255,255,0.08); border-radius: 20px; padding: 0.3rem 0.75rem 0.3rem 0.3rem; font-size: 0.8rem; }
+  .private-room { position: fixed; inset: 0; background: rgba(13,13,13,0.92); z-index: 500; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+  .private-room-box { background: #0d0d0d; border-radius: 24px; width: 100%; max-width: 480px; max-height: 90vh; display: flex; flex-direction: column; border: 1px solid rgba(255,255,255,0.1); overflow: hidden; }
+  .private-room-header { padding: 1.2rem 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; align-items: center; gap: 1rem; }
+  .private-room-chat { flex: 1; overflow-y: auto; padding: 1rem 1.2rem; display: flex; flex-direction: column; gap: 0.5rem; min-height: 200px; max-height: 300px; }
+  .private-room-input { padding: 1rem; border-top: 1px solid rgba(255,255,255,0.08); display: flex; gap: 0.5rem; }
   .mobile-nav { display: none; }
   @media (max-width: 768px) {
     .discover-wrapper { flex-direction: column; }
@@ -516,6 +521,137 @@ function Discover({ user, onMatch, onToast }) {
   );
 }
 
+function PrivateRoom({ user, match, onClose, onToast }) {
+  const [micOn, setMicOn]     = useState(false);
+  const [micErr, setMicErr]   = useState("");
+  const [chat, setChat]       = useState([{ id:1, sys:true, text:`Private room with ${match.name} 🔒 Only you two can join` }]);
+  const [input, setInput]     = useState("");
+  const [pomSecs, setPomSecs] = useState(25*60);
+  const [pomOn, setPomOn]     = useState(false);
+  const [pomMode, setPomMode] = useState("focus");
+  const socketRef  = useRef(null);
+  const localStream = useRef(null);
+  const peerRef    = useRef(null);
+  const chatBottom = useRef(null);
+  const POM = { focus:25*60, break:5*60 };
+  const roomId = `private_${[user.id, match.id].sort().join("_")}`;
+
+  useEffect(() => {
+    (async () => {
+      const { io: sio } = await import("https://cdn.socket.io/4.7.2/socket.io.esm.min.js");
+      const sock = sio("https://studybuddyy-bfop.onrender.com", { auth: { token: getToken() } });
+      socketRef.current = sock;
+      sock.emit("room:join", { roomId, name: user.name, initials: user.initials || getInitials(user.name), photo: user.photo });
+      sock.on("room:chat", msg => {
+        setChat(p => [...p, { id: Date.now()+Math.random(), ...msg }]);
+        setTimeout(() => chatBottom.current?.scrollIntoView({ behavior:"smooth" }), 50);
+      });
+      sock.on("room:peer_joined", ({ socketId }) => {
+        if (localStream.current) {
+          const pc = new RTCPeerConnection({ iceServers:[{urls:"stun:stun.l.google.com:19302"}] });
+          peerRef.current = pc;
+          localStream.current.getTracks().forEach(t => pc.addTrack(t, localStream.current));
+          pc.ontrack = e => { const a = document.createElement("audio"); a.srcObject=e.streams[0]; a.autoplay=true; a.id="priv_audio"; document.body.appendChild(a); };
+          pc.onicecandidate = e => { if(e.candidate) sock.emit("rtc:ice",{toSocketId:socketId,candidate:e.candidate}); };
+          pc.createOffer().then(o => { pc.setLocalDescription(o); sock.emit("rtc:offer",{toSocketId:socketId,offer:o}); });
+        }
+      });
+      sock.on("rtc:offer", async ({ fromSocketId, offer }) => {
+        const pc = new RTCPeerConnection({ iceServers:[{urls:"stun:stun.l.google.com:19302"}] });
+        peerRef.current = pc;
+        if (localStream.current) localStream.current.getTracks().forEach(t => pc.addTrack(t, localStream.current));
+        pc.ontrack = e => { const a = document.createElement("audio"); a.srcObject=e.streams[0]; a.autoplay=true; a.id="priv_audio"; document.body.appendChild(a); };
+        pc.onicecandidate = e => { if(e.candidate) sock.emit("rtc:ice",{toSocketId:fromSocketId,candidate:e.candidate}); };
+        await pc.setRemoteDescription(offer);
+        const ans = await pc.createAnswer(); await pc.setLocalDescription(ans);
+        sock.emit("rtc:answer",{toSocketId:fromSocketId,answer:ans});
+      });
+      sock.on("rtc:answer", ({answer}) => peerRef.current?.setRemoteDescription(answer));
+      sock.on("rtc:ice", ({candidate}) => peerRef.current?.addIceCandidate(candidate));
+    })();
+    return () => {
+      socketRef.current?.emit("room:leave");
+      socketRef.current?.disconnect();
+      localStream.current?.getTracks().forEach(t=>t.stop());
+      peerRef.current?.close();
+      document.getElementById("priv_audio")?.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!pomOn) return;
+    const t = setInterval(() => setPomSecs(p => {
+      if (p<=1) { setPomOn(false); const n=pomMode==="focus"?"break":"focus"; setPomMode(n); setPomSecs(POM[n]); onToast(pomMode==="focus"?"🎉 Break time!":"💪 Focus time!","success"); return POM[n]; }
+      return p-1;
+    }), 1000);
+    return () => clearInterval(t);
+  }, [pomOn, pomMode]);
+
+  const fmt = s => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
+
+  const toggleMic = async () => {
+    if (micOn) { localStream.current?.getTracks().forEach(t=>t.stop()); localStream.current=null; setMicOn(false); return; }
+    try {
+      localStream.current = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
+      setMicOn(true); setMicErr(""); onToast("🎙️ Mic on! "+match.name+" can hear you","success");
+    } catch { setMicErr("Mic denied"); onToast("Mic denied ❌","error"); }
+  };
+
+  const send = () => {
+    if (!input.trim()) return;
+    socketRef.current?.emit("room:chat_msg",{ roomId, text:input.trim() });
+    setChat(p=>[...p,{ id:Date.now(), name:user.name, text:input.trim(), mine:true }]);
+    setInput("");
+    setTimeout(()=>chatBottom.current?.scrollIntoView({behavior:"smooth"}),50);
+  };
+
+  return (
+    <div className="private-room">
+      <div className="private-room-box">
+        <div className="private-room-header">
+          <div style={{ width:40,height:40,borderRadius:"50%",background:userColor(match.id),display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:"#fff",fontSize:"1rem",overflow:"hidden",flexShrink:0 }}>
+            {match.photo ? <img src={match.photo} style={{width:"100%",height:"100%",objectFit:"cover"}} /> : (match.initials||getInitials(match.name))}
+          </div>
+          <div style={{ flex:1 }}>
+            <div style={{ color:"#fff", fontWeight:700, fontFamily:"'Clash Display',sans-serif" }}>🔒 {match.name}</div>
+            <div style={{ color:"#888", fontSize:"0.75rem" }}>Private Room · Only you two</div>
+          </div>
+          {/* Pomodoro mini */}
+          <div style={{ display:"flex", alignItems:"center", gap:"0.4rem", background:"rgba(255,255,255,0.07)", borderRadius:10, padding:"0.3rem 0.7rem" }}>
+            <span style={{ color: pomMode==="focus"?"var(--accent)":"#4ade80", fontWeight:700, fontSize:"0.85rem" }}>{fmt(pomSecs)}</span>
+            <button onClick={()=>setPomOn(p=>!p)} style={{ background:"none",border:"none",color:"#fff",cursor:"pointer",fontSize:"0.85rem" }}>{pomOn?"⏸":"▶"}</button>
+          </div>
+          {/* Mic */}
+          <button onClick={toggleMic} style={{ background:micOn?"#16a34a":"var(--accent)",border:"none",color:"#fff",borderRadius:10,padding:"0.4rem 0.8rem",fontWeight:700,cursor:"pointer",fontSize:"0.8rem" }}>
+            {micOn?"🎙️ ON":"🔇 Mic"}
+          </button>
+          <button onClick={onClose} style={{ background:"rgba(255,255,255,0.08)",border:"none",color:"#aaa",borderRadius:10,padding:"0.4rem 0.7rem",cursor:"pointer",fontSize:"1rem" }}>✕</button>
+        </div>
+        {micErr && <div style={{ background:"#7f1d1d",color:"#fca5a5",padding:"0.5rem 1rem",fontSize:"0.8rem" }}>⚠️ {micErr}</div>}
+        <div className="private-room-chat">
+          {chat.map(m => (
+            <div key={m.id} style={{ textAlign: m.sys?"center":m.mine?"right":"left" }}>
+              {m.sys
+                ? <span style={{ fontSize:"0.72rem",color:"#666",background:"rgba(255,255,255,0.05)",borderRadius:20,padding:"0.2rem 0.75rem" }}>{m.text}</span>
+                : <div>
+                    {!m.mine && <div style={{ fontSize:"0.68rem",color:"#888",marginBottom:"0.1rem" }}>{m.name}</div>}
+                    <span style={{ background:m.mine?"var(--accent)":"rgba(255,255,255,0.1)",color:"#fff",borderRadius:12,padding:"0.35rem 0.75rem",fontSize:"0.85rem",display:"inline-block",maxWidth:"85%",textAlign:"left" }}>{m.text}</span>
+                  </div>
+              }
+            </div>
+          ))}
+          <div ref={chatBottom} />
+        </div>
+        <div className="private-room-input">
+          <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()}
+            placeholder="Message..." style={{ flex:1,background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:10,padding:"0.5rem 0.75rem",color:"#fff",fontSize:"0.88rem",outline:"none",fontFamily:"'DM Sans',sans-serif" }} />
+          <button onClick={send} style={{ background:"var(--accent)",border:"none",color:"#fff",borderRadius:10,padding:"0.5rem 1rem",fontWeight:700,cursor:"pointer" }}>Send</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Messages({ user, onToast }) {
   const [matches, setMatches] = useState([]);
   const [active, setActive] = useState(null);
@@ -523,6 +659,7 @@ function Messages({ user, onToast }) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [privateRoom, setPrivateRoom] = useState(null);
   const pollRef = useRef(null);
   const bottomRef = useRef();
 
@@ -599,12 +736,16 @@ function Messages({ user, onToast }) {
             <>
               <div className="chat-header">
                 <div className="match-avatar" style={{ background:userColor(active.id), width:38, height:38, fontSize:"0.85rem" }}>
-                  {active.initials || getInitials(active.name)}
+                  {active.photo ? <img src={active.photo} style={{width:"100%",height:"100%",objectFit:"cover",borderRadius:"50%"}} /> : (active.initials || getInitials(active.name))}
                 </div>
-                <div>
+                <div style={{ flex:1 }}>
                   <div style={{ fontWeight:600 }}>{active.name}</div>
                   <div style={{ fontSize:"0.78rem", color:"var(--muted)" }}>{active.college}</div>
                 </div>
+                <button onClick={() => setPrivateRoom(active)}
+                  style={{ background:"var(--accent)", border:"none", color:"#fff", borderRadius:10, padding:"0.4rem 0.9rem", fontSize:"0.8rem", fontWeight:700, cursor:"pointer", fontFamily:"'Clash Display',sans-serif", display:"flex", alignItems:"center", gap:"0.3rem" }}>
+                  🎙️ Private Room
+                </button>
               </div>
               <div className="chat-messages">
                 {messages.length === 0 && (
@@ -628,6 +769,7 @@ function Messages({ user, onToast }) {
         </div>
       </div>
     </div>
+    {privateRoom && <PrivateRoom user={user} match={privateRoom} onClose={()=>setPrivateRoom(null)} onToast={onToast} />}
   );
 }
 
