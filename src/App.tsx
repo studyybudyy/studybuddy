@@ -1169,11 +1169,29 @@ function StudyRooms({ user, onToast }) {
   const [pomOn, setPomOn]         = useState(false);
   const [pomMode, setPomMode]     = useState("focus");
 
-  const socketRef    = useRef(null);
-  const localStream  = useRef(null);
-  const peers        = useRef({});
-  const chatBottom   = useRef(null);
-  const POM          = { focus:25*60, break:5*60 };
+  const socketRef     = useRef(null);
+  const localStream   = useRef(null);
+  const peers         = useRef({});        // socketId -> RTCPeerConnection
+  const iceQueues     = useRef({});        // socketId -> candidate[] (buffered before remoteDesc)
+  const membersRef    = useRef([]);        // always-current copy for async callbacks
+  const chatBottom    = useRef(null);
+  const POM           = { focus:25*60, break:5*60 };
+
+  // keep membersRef in sync
+  useEffect(() => { membersRef.current = members; }, [members]);
+
+  // ICE servers — multiple for reliability in India
+  const ICE_CFG = {
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+      { urls: "stun:stun2.l.google.com:19302" },
+      { urls: "stun:stun3.l.google.com:19302" },
+      { urls: "stun:stun4.l.google.com:19302" },
+      { urls: "stun:global.stun.twilio.com:3478" },
+    ],
+    iceCandidatePoolSize: 10,
+  };
 
   // ── live room counts ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -1204,30 +1222,79 @@ function StudyRooms({ user, onToast }) {
   const fmt = s => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
   const pomPct = ((POM[pomMode]-pomSecs)/POM[pomMode])*100;
 
-  // ── WebRTC helpers ────────────────────────────────────────────────────────
-  const createPeer = (remoteSocketId, initiator) => {
-    if (peers.current[remoteSocketId]) return peers.current[remoteSocketId];
-    const pc = new RTCPeerConnection({ iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}] });
+  // ── WebRTC: flush buffered ICE candidates after remote desc is set ────────
+  const flushIceQueue = async (sid) => {
+    const q = iceQueues.current[sid] || [];
+    const pc = peers.current[sid];
+    if (!pc || pc.remoteDescription == null) return;
+    for (const c of q) { try { await pc.addIceCandidate(c); } catch {} }
+    iceQueues.current[sid] = [];
+  };
+
+  // ── WebRTC: create or get peer connection ─────────────────────────────────
+  const createPeer = async (remoteSocketId, initiator) => {
+    // Reuse existing connection if healthy
+    const existing = peers.current[remoteSocketId];
+    if (existing && existing.connectionState !== "failed" && existing.connectionState !== "closed") {
+      return existing;
+    }
+    if (existing) { existing.close(); delete peers.current[remoteSocketId]; }
+
+    const pc = new RTCPeerConnection(ICE_CFG);
     peers.current[remoteSocketId] = pc;
-    if (localStream.current) localStream.current.getTracks().forEach(t => pc.addTrack(t, localStream.current));
+    iceQueues.current[remoteSocketId] = [];
+
+    // Add local audio tracks if mic is on
+    if (localStream.current) {
+      localStream.current.getTracks().forEach(t => pc.addTrack(t, localStream.current));
+    }
+
+    // Play remote audio
     pc.ontrack = e => {
       let el = document.getElementById(`audio_${remoteSocketId}`);
-      if (!el) { el = document.createElement("audio"); el.id=`audio_${remoteSocketId}`; el.autoplay=true; document.body.appendChild(el); }
-      el.srcObject = e.streams[0];
+      if (!el) {
+        el = document.createElement("audio");
+        el.id = `audio_${remoteSocketId}`;
+        el.autoplay = true;
+        el.setAttribute("playsinline", "");
+        document.body.appendChild(el);
+      }
+      if (e.streams && e.streams[0]) el.srcObject = e.streams[0];
     };
-    pc.onicecandidate = e => { if (e.candidate) socketRef.current?.emit("rtc:ice",{toSocketId:remoteSocketId,candidate:e.candidate}); };
-    if (initiator) pc.createOffer().then(o=>{ pc.setLocalDescription(o); socketRef.current?.emit("rtc:offer",{toSocketId:remoteSocketId,offer:o}); });
+
+    pc.onicecandidate = e => {
+      if (e.candidate) {
+        socketRef.current?.emit("rtc:ice", { toSocketId: remoteSocketId, candidate: e.candidate });
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "failed") {
+        // Auto-retry on failure
+        pc.restartIce();
+      }
+    };
+
+    if (initiator) {
+      try {
+        const offer = await pc.createOffer({ offerToReceiveAudio: true });
+        await pc.setLocalDescription(offer);
+        socketRef.current?.emit("rtc:offer", { toSocketId: remoteSocketId, offer });
+      } catch (e) { console.warn("createOffer failed:", e); }
+    }
     return pc;
   };
 
   const removePeer = sid => {
-    peers.current[sid]?.close(); delete peers.current[sid];
+    peers.current[sid]?.close();
+    delete peers.current[sid];
+    delete iceQueues.current[sid];
     document.getElementById(`audio_${sid}`)?.remove();
   };
 
   const cleanupAll = () => {
     Object.keys(peers.current).forEach(removePeer);
-    localStream.current?.getTracks().forEach(t=>t.stop());
+    localStream.current?.getTracks().forEach(t => t.stop());
     localStream.current = null;
     socketRef.current?.emit("room:leave");
     socketRef.current?.disconnect();
@@ -1235,39 +1302,79 @@ function StudyRooms({ user, onToast }) {
     setMicOn(false);
   };
 
-  // ── join a room (called with room object) ─────────────────────────────────
+  // ── join a room ───────────────────────────────────────────────────────────
   const doJoinRoom = (room) => {
     const sock = socketIO("https://studybuddyy-bfop.onrender.com", {
       auth: { token: getToken() },
-      transports: ["websocket","polling"],
+      transports: ["websocket", "polling"],
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
     });
     socketRef.current = sock;
 
-    sock.on("connect_error", () => onToast("Connection error – server may be waking up","error"));
-    sock.on("room:members", mems => setMembers(mems));
-    sock.on("room:chat", msg => {
-      setChat(p => [...p, { id:Date.now()+Math.random(), ...msg }]);
-      setTimeout(()=>chatBottom.current?.scrollIntoView({behavior:"smooth"}),50);
+    sock.on("connect", () => {
+      // Re-announce ourselves on reconnect
+      sock.emit("room:join", { roomId: room.id, name: user.name, initials: user.initials || getInitials(user.name), photo: user.photo || null });
     });
-    sock.on("room:peer_joined", ({socketId, name}) => {
-      onToast(`${name} joined 🎙️`,"success");
-      if (localStream.current) createPeer(socketId, true);
+    sock.on("connect_error", (e) => {
+      console.warn("Socket connect error:", e.message);
+      onToast("Connection issue — retrying...", "error");
     });
-    sock.on("room:peer_left", ({socketId, userId}) => { if (socketId) removePeer(socketId); });
-    sock.on("rtc:offer", async ({fromSocketId, offer}) => {
-      const pc = createPeer(fromSocketId, false);
-      await pc.setRemoteDescription(offer);
-      const ans = await pc.createAnswer();
-      await pc.setLocalDescription(ans);
-      sock.emit("rtc:answer",{toSocketId:fromSocketId,answer:ans});
-    });
-    sock.on("rtc:answer", ({fromSocketId,answer}) => peers.current[fromSocketId]?.setRemoteDescription(answer));
-    sock.on("rtc:ice", ({fromSocketId,candidate}) => peers.current[fromSocketId]?.addIceCandidate(candidate));
 
-    sock.emit("room:join",{ roomId:room.id, name:user.name, initials:user.initials||getInitials(user.name), photo:user.photo||null });
+    sock.on("room:members", mems => setMembers(mems));
+
+    sock.on("room:chat", msg => {
+      setChat(p => [...p, { id: Date.now() + Math.random(), ...msg }]);
+      setTimeout(() => chatBottom.current?.scrollIntoView({ behavior: "smooth" }), 50);
+    });
+
+    sock.on("room:peer_joined", async ({ socketId, name }) => {
+      onToast(`${name} joined 🎙️`, "success");
+      // Only the existing user initiates — new joiner waits for offer
+      if (localStream.current) await createPeer(socketId, true);
+    });
+
+    sock.on("room:peer_left", ({ socketId }) => {
+      if (socketId) removePeer(socketId);
+    });
+
+    sock.on("rtc:offer", async ({ fromSocketId, offer }) => {
+      const pc = await createPeer(fromSocketId, false);
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        await flushIceQueue(fromSocketId);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        sock.emit("rtc:answer", { toSocketId: fromSocketId, answer });
+      } catch (e) { console.warn("handle offer failed:", e); }
+    });
+
+    sock.on("rtc:answer", async ({ fromSocketId, answer }) => {
+      const pc = peers.current[fromSocketId];
+      if (!pc) return;
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        await flushIceQueue(fromSocketId);
+      } catch (e) { console.warn("handle answer failed:", e); }
+    });
+
+    sock.on("rtc:ice", async ({ fromSocketId, candidate }) => {
+      const pc = peers.current[fromSocketId];
+      if (!pc) return;
+      if (pc.remoteDescription == null) {
+        // Buffer until remote description is set
+        iceQueues.current[fromSocketId] = iceQueues.current[fromSocketId] || [];
+        iceQueues.current[fromSocketId].push(candidate);
+      } else {
+        try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch {}
+      }
+    });
+
+    sock.emit("room:join", { roomId: room.id, name: user.name, initials: user.initials || getInitials(user.name), photo: user.photo || null });
 
     setActiveRoom(room);
-    setMembers([]); setChat([{id:1,sys:true,text:`Welcome to ${room.name}! 🎯`}]);
+    setMembers([]); setChat([{ id: 1, sys: true, text: `Welcome to ${room.name}! 🎯` }]);
     setPomSecs(25*60); setPomMode("focus"); setPomOn(false);
     setPlaying(false); setTrackIdx(0); setMicErr("");
     setView("room");
@@ -1282,16 +1389,32 @@ function StudyRooms({ user, onToast }) {
 
   const toggleMic = async () => {
     if (micOn) {
-      localStream.current?.getTracks().forEach(t=>t.stop());
-      localStream.current = null; setMicOn(false); return;
+      localStream.current?.getTracks().forEach(t => t.stop());
+      localStream.current = null;
+      setMicOn(false);
+      onToast("Mic off 🔇", "success");
+      return;
     }
     try {
-      localStream.current = await navigator.mediaDevices.getUserMedia({audio:true,video:false});
-      setMicOn(true); setMicErr("");
-      onToast("🎙️ Mic ON — others can hear you!","success");
-      // Offer to all existing members in room
-      members.filter(m => m.userId !== user.id && m.socketId).forEach(m => createPeer(m.socketId, true));
-    } catch { setMicErr("Microphone access denied. Allow mic in browser settings."); onToast("Mic denied ❌","error"); }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 44100 }, video: false });
+      localStream.current = stream;
+      setMicOn(true);
+      setMicErr("");
+      onToast("🎙️ Mic ON — others can hear you!", "success");
+      // Connect to ALL current members using the always-fresh ref
+      const currentMembers = membersRef.current;
+      for (const m of currentMembers) {
+        if (m.userId !== user.id && m.socketId) {
+          await createPeer(m.socketId, true);
+        }
+      }
+    } catch (err) {
+      const msg = err.name === "NotAllowedError"
+        ? "Mic blocked — please allow microphone in browser settings and reload."
+        : "Could not access microphone: " + err.message;
+      setMicErr(msg);
+      onToast("Mic denied ❌", "error");
+    }
   };
 
   const sendChat = () => {
