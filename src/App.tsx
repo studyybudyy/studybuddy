@@ -201,6 +201,31 @@ const style = `
   .private-room-header { padding: 1.2rem 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; align-items: center; gap: 1rem; }
   .private-room-chat { flex: 1; overflow-y: auto; padding: 1rem 1.2rem; display: flex; flex-direction: column; gap: 0.5rem; min-height: 200px; max-height: 300px; }
   .private-room-input { padding: 1rem; border-top: 1px solid rgba(255,255,255,0.08); display: flex; gap: 0.5rem; }
+  .ai-wrap { display: flex; flex-direction: column; height: calc(100vh - 120px); max-width: 800px; margin: 0 auto; }
+  .ai-header { padding-bottom: 1rem; border-bottom: 1px solid var(--border); margin-bottom: 0; }
+  .ai-messages { flex: 1; overflow-y: auto; padding: 1rem 0; display: flex; flex-direction: column; gap: 1rem; }
+  .ai-bubble-wrap { display: flex; gap: 0.7rem; align-items: flex-start; }
+  .ai-bubble-wrap.user { flex-direction: row-reverse; }
+  .ai-avatar { width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1rem; flex-shrink: 0; font-weight: 700; }
+  .ai-bubble { max-width: 75%; padding: 0.75rem 1rem; border-radius: 16px; font-size: 0.9rem; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+  .ai-bubble.assistant { background: var(--card); border: 1px solid var(--border); border-top-left-radius: 4px; }
+  .ai-bubble.user { background: var(--accent); color: #fff; border-top-right-radius: 4px; }
+  .ai-bubble code { background: rgba(0,0,0,0.07); padding: 0.1rem 0.35rem; border-radius: 4px; font-family: monospace; font-size: 0.85em; }
+  .ai-bubble pre { background: #1e293b; color: #e2e8f0; padding: 0.75rem 1rem; border-radius: 10px; overflow-x: auto; margin: 0.5rem 0; font-size: 0.82rem; }
+  .ai-bubble pre code { background: none; padding: 0; color: inherit; }
+  .ai-bubble strong { font-weight: 700; }
+  .ai-input-row { display: flex; gap: 0.6rem; padding-top: 0.8rem; border-top: 1px solid var(--border); }
+  .ai-input { flex: 1; border: 1.5px solid var(--border); border-radius: 12px; padding: 0.75rem 1rem; font-family: "DM Sans",sans-serif; font-size: 0.92rem; outline: none; background: var(--cream); resize: none; line-height: 1.4; max-height: 120px; transition: border 0.15s; }
+  .ai-input:focus { border-color: var(--accent); }
+  .ai-send { background: var(--accent); border: none; color: #fff; border-radius: 12px; padding: 0.75rem 1.2rem; cursor: pointer; font-size: 1.1rem; flex-shrink: 0; transition: opacity 0.15s; }
+  .ai-send:disabled { opacity: 0.5; cursor: not-allowed; }
+  .ai-typing { display: flex; gap: 4px; align-items: center; padding: 0.6rem 0.8rem; }
+  .ai-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: bounce 1.2s infinite; }
+  .ai-dot:nth-child(2) { animation-delay: 0.2s; }
+  .ai-dot:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes bounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-6px)} }
+  .ai-suggestion { display: inline-flex; background: var(--cream); border: 1px solid var(--border); border-radius: 20px; padding: 0.4rem 0.9rem; font-size: 0.82rem; cursor: pointer; transition: background 0.15s, border 0.15s; white-space: nowrap; }
+  .ai-suggestion:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
   .mobile-nav { display: none; }
   @media (max-width: 768px) {
     .discover-wrapper { flex-direction: column; }
@@ -1520,6 +1545,166 @@ function StudyRooms({ user, onToast }) {
 }
 
 
+function AIAssistant({ user }) {
+  const SUGGESTIONS = [
+    "Explain Newton's laws of motion",
+    "How does photosynthesis work?",
+    "Solve: 2x² + 5x - 3 = 0",
+    "Explain Big O notation",
+    "What is the difference between mitosis and meiosis?",
+    "Explain recursion with an example",
+    "Summarize the French Revolution",
+    "How does machine learning work?",
+  ];
+
+  const [messages, setMessages] = useState([
+    { role: "assistant", content: "Hi! I'm your AI Study Assistant 🎓
+
+Ask me anything — math, science, history, coding, essays — I'm here to help you understand, not just give answers!
+
+What are you studying today?" }
+  ]);
+  const [input, setInput]       = useState("");
+  const [loading, setLoading]   = useState(false);
+  const [subject, setSubject]   = useState("General");
+  const bottomRef               = useRef(null);
+  const textareaRef             = useRef(null);
+
+  const SUBJECTS = ["General", "Math", "Science", "History", "CS/Coding", "Literature", "Economics", "Physics", "Chemistry"];
+
+  useEffect(() => {
+    setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 80);
+  }, [messages, loading]);
+
+  const formatContent = (text) => {
+    // Simple markdown-like rendering
+    return text
+      .replace(/```(\w*)
+?([\s\S]*?)```/g, (_, lang, code) =>
+        `<pre><code>${code.replace(/</g,"&lt;").replace(/>/g,"&gt;")}</code></pre>`)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*(.+?)\*/g, "<em>$1</em>")
+      .replace(/^#{1,3}\s(.+)$/gm, "<strong>$1</strong>")
+      .replace(/
+/g, "<br/>");
+  };
+
+  const send = async (text) => {
+    const q = (text || input).trim();
+    if (!q || loading) return;
+    setInput("");
+
+    const newMsg = { role: "user", content: q };
+    const updated = [...messages, newMsg];
+    setMessages(updated);
+    setLoading(true);
+
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          system: `You are an expert AI Study Assistant inside StudyBuddy, a peer study platform. The student's name is ${user?.name || "Student"} and they are studying ${subject}. 
+
+Your role:
+- Explain concepts clearly, step by step
+- For math/science: show working, not just answers
+- Use examples relevant to student life
+- Be encouraging and patient
+- Format responses nicely using **bold** for key terms, code blocks for code/equations
+- Keep responses concise but complete
+- If it's a homework problem, guide don't just solve — ask them to try a step first when appropriate`,
+          messages: updated.map(m => ({ role: m.role, content: m.content }))
+        })
+      });
+      const data = await res.json();
+      const reply = data.content?.[0]?.text || "Sorry, I couldn't process that. Try again!";
+      setMessages(p => [...p, { role: "assistant", content: reply }]);
+    } catch (e) {
+      setMessages(p => [...p, { role: "assistant", content: "⚠️ Connection error. Please try again in a moment." }]);
+    }
+    setLoading(false);
+  };
+
+  const handleKey = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  };
+
+  const clearChat = () => setMessages([{ role:"assistant", content:"Chat cleared! What would you like to study? 📚" }]);
+
+  return (
+    <div className="ai-wrap">
+      <div className="ai-header">
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:"0.75rem" }}>
+          <div>
+            <h2 style={{ fontFamily:"'Clash Display',sans-serif", fontSize:"1.4rem", fontWeight:700, display:"flex", alignItems:"center", gap:"0.5rem" }}>
+              <span style={{ background:"linear-gradient(135deg,#7c3aed,#2563eb)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>✦ AI Study Assistant</span>
+            </h2>
+            <p style={{ color:"var(--muted)", fontSize:"0.83rem", marginTop:"0.1rem" }}>Ask any academic question — I'll explain it clearly</p>
+          </div>
+          <div style={{ display:"flex", gap:"0.5rem", alignItems:"center" }}>
+            <select value={subject} onChange={e=>setSubject(e.target.value)}
+              style={{ border:"1.5px solid var(--border)", borderRadius:8, padding:"0.4rem 0.7rem", fontSize:"0.82rem", background:"var(--cream)", outline:"none", fontFamily:"'DM Sans',sans-serif", cursor:"pointer" }}>
+              {SUBJECTS.map(s => <option key={s}>{s}</option>)}
+            </select>
+            <button onClick={clearChat} style={{ background:"none", border:"1.5px solid var(--border)", borderRadius:8, padding:"0.4rem 0.75rem", fontSize:"0.8rem", cursor:"pointer", color:"var(--muted)" }}>
+              🗑 Clear
+            </button>
+          </div>
+        </div>
+        {/* Suggestions */}
+        {messages.length <= 1 && (
+          <div style={{ marginTop:"0.9rem", display:"flex", gap:"0.5rem", flexWrap:"wrap" }}>
+            {SUGGESTIONS.slice(0,5).map((s,i) => (
+              <div key={i} className="ai-suggestion" onClick={() => send(s)}>{s}</div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="ai-messages">
+        {messages.map((m, i) => (
+          <div key={i} className={`ai-bubble-wrap ${m.role}`}>
+            <div className="ai-avatar" style={{
+              background: m.role==="assistant" ? "linear-gradient(135deg,#7c3aed,#2563eb)" : userColor(user?.id),
+              color: "#fff", fontSize: m.role==="assistant" ? "1rem" : "0.75rem"
+            }}>
+              {m.role==="assistant" ? "✦" : (user?.initials || getInitials(user?.name||"U"))}
+            </div>
+            <div className={`ai-bubble ${m.role}`}
+              dangerouslySetInnerHTML={{ __html: formatContent(m.content) }} />
+          </div>
+        ))}
+
+        {loading && (
+          <div className="ai-bubble-wrap assistant">
+            <div className="ai-avatar" style={{ background:"linear-gradient(135deg,#7c3aed,#2563eb)", color:"#fff" }}>✦</div>
+            <div className="ai-bubble assistant">
+              <div className="ai-typing">
+                <div className="ai-dot"/><div className="ai-dot"/><div className="ai-dot"/>
+              </div>
+            </div>
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      <div className="ai-input-row">
+        <textarea ref={textareaRef} className="ai-input" rows={1} value={input}
+          onChange={e => { setInput(e.target.value); e.target.style.height="auto"; e.target.style.height=Math.min(e.target.scrollHeight,120)+"px"; }}
+          onKeyDown={handleKey}
+          placeholder="Ask anything... (Shift+Enter for new line)" />
+        <button className="ai-send" onClick={() => send()} disabled={loading || !input.trim()}>
+          {loading ? "⏳" : "➤"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MatchPopup({ match, onClose }) {
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(13,13,13,0.7)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center", padding:"1rem" }}>
@@ -1568,6 +1753,7 @@ export default function App() {
     { id:"friends",  label:"👫 Friends" },
     { id:"messages", label:"💬 Messages" },
     { id:"rooms",    label:"🎧 Rooms" },
+    { id:"ai",       label:"✦ AI Tutor" },
     { id:"tools",    label:"⏱ Study Tools" },
     { id:"rating",   label:"⭐ Rate" },
     { id:"profile",  label:"👤 Profile" },
@@ -1597,6 +1783,7 @@ export default function App() {
           {tab==="friends"  && <Friends user={user} onToast={showToast} onMessage={m => { setTab("messages"); }} />}
           {tab==="messages" && <Messages user={user} onToast={showToast}/>}
           {tab==="rooms"    && <StudyRooms user={user} onToast={showToast}/>}
+          {tab==="ai"       && <AIAssistant user={user}/>}
           {tab==="tools"    && <StudyTools onToast={showToast}/>}
           {tab==="rating"   && <Rating user={user} onToast={showToast}/>}
           {tab==="profile"  && <Profile user={user} setUser={setUser} onToast={showToast}/>}
@@ -1611,6 +1798,7 @@ export default function App() {
           { id:"friends",  icon:"👫", label:"Friends" },
           { id:"messages", icon:"💬", label:"Messages" },
           { id:"rooms",    icon:"🎧", label:"Rooms" },
+          { id:"ai",       icon:"✦",  label:"AI Tutor" },
           { id:"tools",    icon:"⏱",  label:"Tools" },
           { id:"rating",   icon:"⭐", label:"Rate" },
           { id:"profile",  icon:"👤", label:"Profile" },
