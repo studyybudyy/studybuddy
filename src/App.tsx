@@ -546,25 +546,137 @@ const style = `
 
   /* ─── MOBILE NAV ─────────────────────────────────────────── */
   .mobile-nav { display:none; }
+
+  /* ─── TABLET (≤900px) ────────────────────────────────────── */
+  @media (max-width:900px) {
+    .nav-tabs { gap:1px; }
+    .nav-tab { padding:0.3rem 0.6rem; font-size:0.7rem; }
+    .discover-wrapper { gap:1rem; }
+    .discover-filters { width:180px; }
+    .cards-grid { grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); }
+    .chat-sidebar { width:220px; }
+  }
+
+  /* ─── MOBILE (≤768px) ────────────────────────────────────── */
   @media (max-width:768px) {
-    .discover-wrapper { flex-direction:column; }
-    .discover-filters { width:100%; }
-    .chat-layout { flex-direction:column; height:auto; }
-    .chat-sidebar { width:100%; height:190px; }
-    .grid-2 { grid-template-columns:1fr; }
-    .main { padding:1rem; padding-bottom:82px; }
+    /* iOS: prevent auto-zoom on input focus (needs min 16px font) */
+    input, select, textarea { font-size:16px !important; }
+    /* Nav */
+    .nav { padding:0 1rem; height:56px; }
+    .nav-logo { font-size:1.1rem; }
+    .nav-logo-icon { width:26px; height:26px; font-size:0.75rem; }
     .nav-tabs { display:none; }
+    .nav-user { gap:0.5rem; }
+    .logout-btn { padding:0.28rem 0.6rem; font-size:0.68rem; }
+    .avatar { width:30px; height:30px; font-size:0.7rem; }
+
+    /* Main padding — room for bottom nav */
+    .main { padding:1rem 0.85rem 88px; }
+
+    /* Mobile Bottom Nav */
     .mobile-nav {
       display:flex; position:fixed; bottom:0; left:0; right:0;
-      background:rgba(5,5,10,0.92);
-      backdrop-filter:blur(24px) saturate(180%);
-      -webkit-backdrop-filter:blur(24px) saturate(180%);
-      z-index:200; border-top:1px solid var(--line2);
-      padding:0.38rem 0 env(safe-area-inset-bottom, 0.55rem);
+      background:rgba(5,5,10,0.96);
+      backdrop-filter:blur(24px) saturate(200%);
+      -webkit-backdrop-filter:blur(24px) saturate(200%);
+      z-index:300; border-top:1px solid var(--line2);
+      padding:0.4rem 0.3rem env(safe-area-inset-bottom, 0.5rem);
+      gap:2px;
     }
-    .mobile-nav-btn { flex:1; display:flex; flex-direction:column; align-items:center; gap:0.12rem; background:none; border:none; color:var(--t4); cursor:pointer; padding:0.28rem 0; font-size:0.48rem; font-family:'Bricolage Grotesque',sans-serif; transition:color 0.15s; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; }
+    .mobile-nav-btn {
+      flex:1; display:flex; flex-direction:column; align-items:center;
+      gap:0.1rem; background:none; border:none; color:var(--t4);
+      cursor:pointer; padding:0.3rem 0.2rem;
+      font-size:0.45rem; font-family:'Bricolage Grotesque',sans-serif;
+      font-weight:700; text-transform:uppercase; letter-spacing:0.04em;
+      transition:color 0.15s; border-radius:8px; min-width:0;
+    }
+    .mobile-nav-btn:hover { background:rgba(255,255,255,0.04); }
     .mobile-nav-btn.active { color:var(--p2); }
-    .mobile-nav-btn span:first-child { font-size:1.1rem; }
+    .mobile-nav-btn span:first-child { font-size:1.15rem; line-height:1.2; }
+
+    /* Layout grids */
+    .grid-2 { grid-template-columns:1fr; gap:0.85rem; }
+    .cards-grid { grid-template-columns:1fr 1fr; gap:0.7rem; }
+    .friends-grid { grid-template-columns:1fr; gap:0.75rem; }
+
+    /* Page headings */
+    .page-title { font-size:1.25rem; }
+    .page-sub { font-size:0.8rem; margin-bottom:1rem; }
+
+    /* Cards */
+    .card { padding:1.1rem; border-radius:var(--r); }
+
+    /* Auth */
+    .auth-card { padding:1.8rem 1.4rem; border-radius:var(--r-lg); margin:0.5rem; }
+    .auth-wrapper { padding:1rem; align-items:flex-start; padding-top:2rem; }
+    .auth-logo-icon { width:44px; height:44px; font-size:1.2rem; border-radius:13px; }
+    .auth-logo h1 { font-size:1.45rem; }
+
+    /* Discover */
+    .discover-wrapper { flex-direction:column; gap:0.85rem; }
+    .discover-filters { width:100%; }
+    .filter-section { margin-bottom:0.7rem; }
+    .profile-card-banner { height:70px; }
+    .profile-card-body { padding:0.55rem 0.85rem 0.85rem; }
+    .profile-card-name { font-size:0.88rem; }
+    .profile-card-avatar { width:52px; height:52px; margin-top:-26px; }
+
+    /* Messages */
+    .chat-layout { flex-direction:column; height:auto; gap:0.75rem; }
+    .chat-sidebar { width:100%; height:auto; max-height:220px; border-radius:var(--r); }
+    .chat-sidebar-header { padding:0.75rem 1rem 0.5rem; }
+    .chat-item { padding:0.65rem 1rem; }
+    .chat-main { height:calc(100svh - 400px); min-height:280px; border-radius:var(--r); }
+    .chat-header { padding:0.75rem 1rem; }
+    .chat-messages { padding:0.75rem 1rem; }
+    .msg-bubble { font-size:0.82rem; padding:0.48rem 0.78rem; max-width:85%; }
+    .chat-input-row { padding:0.65rem 0.85rem; gap:0.4rem; }
+
+    /* Profile */
+    .profile-hero { flex-direction:column; text-align:center; padding:1.2rem; gap:0.85rem; border-radius:var(--r-lg); }
+    .profile-hero-avatar { width:68px; height:68px; font-size:1.5rem; }
+    .profile-hero::before { display:none; }
+    .style-options { justify-content:center; }
+
+    /* Study tools timer */
+    .timer-circle { width:160px; height:160px; font-size:2.1rem; }
+
+    /* Rooms */
+    .room-inside { padding:1.1rem; border-radius:var(--r-lg); }
+    .room-timer-display { font-size:3rem; }
+    .lofi-player { padding:0.75rem; gap:0.7rem; }
+    .private-room-box { border-radius:var(--r-lg); }
+
+    /* AI */
+    .ai-wrap { height:calc(100svh - 160px); }
+    .ai-bubble { max-width:88%; font-size:0.82rem; padding:0.65rem 0.85rem; }
+    .ai-input { font-size:0.82rem; padding:0.62rem 0.85rem; }
+    .ai-send { padding:0.62rem 0.95rem; font-size:0.9rem; }
+
+    /* Rating */
+    .rating-row { flex-direction:column; align-items:flex-start; gap:0.3rem; }
+    .star { font-size:1.3rem; }
+
+    /* Admin stats grid */
+    .admin-stats-grid { grid-template-columns:1fr 1fr !important; gap:0.75rem !important; }
+    .stat-num { font-size:1.5rem; }
+
+    /* Toast */
+    .toast { bottom:5.5rem; right:0.75rem; left:0.75rem; max-width:100%; font-size:0.82rem; }
+  }
+
+  /* ─── SMALL MOBILE (≤420px) ─────────────────────────────── */
+  @media (max-width:420px) {
+    .main { padding:0.75rem 0.7rem 90px; }
+    .cards-grid { grid-template-columns:1fr; }
+    .chat-main { height:calc(100vh - 380px); }
+    .ai-wrap { height:calc(100vh - 155px); }
+    .mobile-nav-btn span:first-child { font-size:1.05rem; }
+    .mobile-nav-btn { font-size:0.4rem; }
+    .auth-card { padding:1.5rem 1.1rem; }
+    .nav { height:52px; }
+    .main { padding-top:0.75rem; }
   }
 `;
 
@@ -1093,7 +1205,7 @@ function Profile({ user, setUser, onToast }) {
             <label>Profile Picture</label>
             <div style={{ display:"flex", justifyContent:"center", marginTop:"0.5rem" }}>
               <div className="pic-upload-wrap" onClick={() => fileRef.current?.click()}>
-                <div style={{ width:90, height:90, borderRadius:"50%", background:userColor(user.id), display:"flex", alignItems:"center", justifyContent:"center", fontSize:"2rem", fontWeight:700, color:"#fff", overflow:"hidden", border:"3px solid var(--accent)" }}>
+                <div style={{ width:80, height:80, borderRadius:"50%", background:userColor(user.id), display:"flex", alignItems:"center", justifyContent:"center", fontSize:"1.8rem", fontWeight:700, color:"#fff", overflow:"hidden", border:"2px solid var(--p)" }}>
                   {photo ? <img src={photo} alt="avatar" style={{ width:"100%", height:"100%", objectFit:"cover" }} /> : (user.initials || getInitials(user.name))}
                 </div>
                 <div className="pic-overlay">📷<br/>Upload</div>
@@ -1483,10 +1595,10 @@ function Friends({ user, onToast, onMessage }) {
           const isOpen = expanded === m.match_id;
           return (
             <div key={m.match_id} className="card" style={{ padding:0, overflow:"hidden" }}>
-              <div style={{ height:70, background:`linear-gradient(135deg, ${userColor(m.id)} 0%, #1e293b 100%)` }} />
+              <div style={{ height:70, background:`linear-gradient(135deg, ${userColor(m.id)}55 0%, var(--base) 100%)` }} />
               <div style={{ padding:"0 1rem 1rem" }}>
                 <div style={{ display:"flex", alignItems:"flex-end", gap:"0.75rem", marginTop:-30, marginBottom:"0.6rem" }}>
-                  <div style={{ width:60, height:60, borderRadius:"50%", background:userColor(m.id), display:"flex", alignItems:"center", justifyContent:"center", fontSize:"1.4rem", fontWeight:700, color:"#fff", border:"3px solid var(--card)", flexShrink:0, overflow:"hidden" }}>
+                  <div style={{ width:56, height:56, borderRadius:"50%", background:userColor(m.id), display:"flex", alignItems:"center", justifyContent:"center", fontSize:"1.2rem", fontWeight:700, color:"#fff", border:"2px solid var(--lift)", flexShrink:0, overflow:"hidden" }}>
                     {m.photo ? <img src={m.photo} alt={m.name} style={{ width:"100%", height:"100%", objectFit:"cover" }} /> : (m.initials || getInitials(m.name))}
                   </div>
                   <div style={{ paddingBottom:"0.2rem", flex:1 }}>
@@ -1990,7 +2102,7 @@ function StudyRooms({ user, onToast }) {
       <div style={{display:"grid",gridTemplateColumns:"1fr 290px",gap:"1.2rem"}}>
         {/* Left panel */}
         <div>
-          <div className="room-inside">
+          <div className="room-inside" style={{ overflow:"hidden" }}>
             {/* Members */}
             <div style={{marginBottom:"1rem"}}>
               <div style={{fontSize:"0.7rem",fontWeight:700,color:"#888",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:"0.4rem"}}>👥 {members.length} in room</div>
