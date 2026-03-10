@@ -491,17 +491,7 @@ const style = `
   }
   .room-timer-display { font-family:'Bricolage Grotesque',sans-serif; font-size:3.8rem; font-weight:800; text-align:center; letter-spacing:-3px; color:var(--t1); }
   .room-phase { text-align:center; font-size:0.82rem; color:var(--t2); margin-bottom:0.8rem; }
-  .sp-wrap { margin-top:1rem; }
-  .sp-chip { cursor:pointer; padding:0.3rem 0.75rem; border-radius:99px; font-size:0.72rem; font-weight:600; border:none; transition:all 0.2s; background:rgba(255,255,255,0.07); color:#aaa; }
-  .sp-chip.active { background:#1DB954; color:#fff; box-shadow:0 0 12px #1DB95488; }
-  .sp-chip:hover { background:rgba(255,255,255,0.12); color:#fff; }
-  .sp-open-btn { width:100%; padding:0.7rem; border-radius:var(--r); background:rgba(29,185,84,0.1); border:1px solid rgba(29,185,84,0.3); color:#1DB954; cursor:pointer; font-size:0.84rem; font-weight:700; display:flex; align-items:center; justify-content:center; gap:0.5rem; transition:all 0.2s; font-family:'Bricolage Grotesque',sans-serif; }
-  .sp-open-btn:hover { background:rgba(29,185,84,0.18); }
-  .sp-player-box { border-radius:var(--r-lg); overflow:hidden; border:1px solid rgba(29,185,84,0.2); }
-  .sp-player-footer { background:rgba(0,0,0,0.4); padding:0.45rem 0.85rem; display:flex; align-items:center; justify-content:space-between; border-top:1px solid rgba(255,255,255,0.06); }
-  .sp-note { font-size:0.68rem; color:#888; }
-  .sp-close { background:none; border:none; color:#666; cursor:pointer; font-size:0.72rem; padding:0.15rem 0.4rem; border-radius:4px; transition:color 0.15s; }
-  .sp-close:hover { color:#aaa; }
+  /* Spotify player styles are inline */
   .member-chip { display:flex; align-items:center; gap:0.32rem; background:rgba(255,255,255,0.04); border:1px solid var(--line); border-radius:99px; padding:0.25rem 0.65rem 0.25rem 0.25rem; font-size:0.73rem; color:var(--t2); }
 
   /* Private room modal */
@@ -1651,14 +1641,374 @@ function Friends({ user, onToast, onMessage }) {
 }
 
 
-const SPOTIFY_PLAYLISTS = [
-  { title: "Lo-Fi Study Beats", sub: "Chill beats to study & relax", emoji: "🎵", id: "37i9dQZF1DWWQRwui0ExPn" },
-  { title: "Deep Focus",        sub: "Keep calm and focus",          emoji: "🧠", id: "37i9dQZF1DWZeKCadgRdKQ" },
-  { title: "Focus Flow",        sub: "Uptempo instrumental beats",   emoji: "⚡", id: "37i9dQZF1DWZZbwlv3Vmtr" },
-  { title: "Peaceful Piano",    sub: "Relax and indulge",            emoji: "🎹", id: "37i9dQZF1DX4sWSpwq3LiO" },
-  { title: "Ambient Chill",     sub: "Soft background soundscapes",  emoji: "🌊", id: "37i9dQZF1DX3Ogo9pFvBkY" },
-  { title: "Coding Mode",       sub: "Music for late-night coding",  emoji: "💻", id: "37i9dQZF1DX5trt9i14X7j" },
-];
+// ── Spotify OAuth PKCE helpers ──────────────────────────────────────────────
+const SP_CLIENT_ID   = "2d31353eea8c49fe84c92ee1674c2738";
+const SP_REDIRECT    = "https://studyybudyy.github.io/studybuddy";
+const SP_SCOPES      = "streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state user-read-currently-playing";
+
+async function spPKCEChallenge() {
+  const arr = new Uint8Array(32);
+  crypto.getRandomValues(arr);
+  const verifier = btoa(String.fromCharCode(...arr)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=/g,"");
+  const data = new TextEncoder().encode(verifier);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  const challenge = btoa(String.fromCharCode(...new Uint8Array(hash))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=/g,"");
+  return { verifier, challenge };
+}
+
+function spLogin() {
+  spPKCEChallenge().then(({ verifier, challenge }) => {
+    sessionStorage.setItem("sp_verifier", verifier);
+    const params = new URLSearchParams({
+      client_id: SP_CLIENT_ID, response_type: "code",
+      redirect_uri: SP_REDIRECT, scope: SP_SCOPES,
+      code_challenge_method: "S256", code_challenge: challenge,
+    });
+    window.location.href = `https://accounts.spotify.com/authorize?${params}`;
+  });
+}
+
+async function spExchangeCode(code) {
+  const verifier = sessionStorage.getItem("sp_verifier");
+  const res = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code", code,
+      redirect_uri: SP_REDIRECT, client_id: SP_CLIENT_ID, code_verifier: verifier,
+    }),
+  });
+  return res.json();
+}
+
+async function spRefreshToken(refresh_token) {
+  const res = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token", refresh_token, client_id: SP_CLIENT_ID,
+    }),
+  });
+  return res.json();
+}
+
+async function spSearch(q, token) {
+  const res = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(q)}&type=track,album,playlist&limit=8`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  return res.json();
+}
+
+// Spotify Player component
+function SpotifyPlayer({ onToast }) {
+  const [token, setToken]         = useState(() => sessionStorage.getItem("sp_token") || "");
+  const [query, setQuery]         = useState("");
+  const [results, setResults]     = useState(null);
+  const [searching, setSearching] = useState(false);
+  const [deviceId, setDeviceId]   = useState("");
+  const [nowPlaying, setNowPlaying] = useState(null);
+  const [paused, setPaused]       = useState(true);
+  const [volume, setVolume]       = useState(0.5);
+  const [progress, setProgress]   = useState(0);
+  const [duration, setDuration]   = useState(0);
+  const [isPremium, setIsPremium] = useState(null); // null=unknown, true/false
+  const playerRef = useRef(null);
+  const progressRef = useRef(null);
+
+  // Handle OAuth callback
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    if (code && !token) {
+      spExchangeCode(code).then(data => {
+        if (data.access_token) {
+          sessionStorage.setItem("sp_token", data.access_token);
+          sessionStorage.setItem("sp_refresh", data.refresh_token || "");
+          sessionStorage.setItem("sp_expires", String(Date.now() + data.expires_in * 1000));
+          setToken(data.access_token);
+          // Clean URL
+          window.history.replaceState({}, "", window.location.pathname);
+        }
+      });
+    }
+  }, []);
+
+  // Check premium & load Web Playback SDK
+  useEffect(() => {
+    if (!token) return;
+    // Check user profile for premium
+    fetch("https://api.spotify.com/v1/me", { headers:{ Authorization:`Bearer ${token}` }})
+      .then(r=>r.json()).then(d => {
+        setIsPremium(d.product === "premium");
+        if (d.product !== "premium") return;
+        // Load SDK
+        if (!window.Spotify) {
+          const script = document.createElement("script");
+          script.src = "https://sdk.scdn.co/spotify-player.js";
+          document.head.appendChild(script);
+        }
+        window.onSpotifyWebPlaybackSDKReady = () => initPlayer(token);
+        if (window.Spotify) initPlayer(token);
+      });
+  }, [token]);
+
+  function initPlayer(accessToken) {
+    if (playerRef.current) return;
+    const player = new window.Spotify.Player({
+      name: "StudyBuddy 🎧",
+      getOAuthToken: cb => {
+        const exp = Number(sessionStorage.getItem("sp_expires") || 0);
+        if (Date.now() > exp - 60000) {
+          const refresh = sessionStorage.getItem("sp_refresh");
+          if (refresh) {
+            spRefreshToken(refresh).then(d => {
+              if (d.access_token) {
+                sessionStorage.setItem("sp_token", d.access_token);
+                sessionStorage.setItem("sp_expires", String(Date.now() + d.expires_in * 1000));
+                setToken(d.access_token);
+                cb(d.access_token);
+              } else cb(accessToken);
+            });
+          } else cb(accessToken);
+        } else cb(accessToken);
+      },
+      volume: 0.5,
+    });
+    player.addListener("ready", ({ device_id }) => setDeviceId(device_id));
+    player.addListener("player_state_changed", state => {
+      if (!state) return;
+      setNowPlaying(state.track_window?.current_track || null);
+      setPaused(state.paused);
+      setProgress(state.position);
+      setDuration(state.duration);
+    });
+    player.addListener("authentication_error", () => {
+      onToast("Spotify auth error — please reconnect", "error");
+      sessionStorage.removeItem("sp_token");
+      setToken("");
+    });
+    player.connect();
+    playerRef.current = player;
+  }
+
+  // Progress ticker
+  useEffect(() => {
+    if (paused) { clearInterval(progressRef.current); return; }
+    progressRef.current = setInterval(() => setProgress(p => Math.min(p + 1000, duration)), 1000);
+    return () => clearInterval(progressRef.current);
+  }, [paused, duration]);
+
+  async function playTrack(uri) {
+    if (!deviceId) { onToast("Player not ready yet, wait a moment", "error"); return; }
+    await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`, {
+      method: "PUT",
+      headers: { Authorization:`Bearer ${token}`, "Content-Type":"application/json" },
+      body: JSON.stringify({ uris: [uri] }),
+    });
+  }
+
+  async function playContext(uri) {
+    if (!deviceId) { onToast("Player not ready yet, wait a moment", "error"); return; }
+    await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`, {
+      method: "PUT",
+      headers: { Authorization:`Bearer ${token}`, "Content-Type":"application/json" },
+      body: JSON.stringify({ context_uri: uri }),
+    });
+  }
+
+  async function doSearch() {
+    if (!query.trim()) return;
+    setSearching(true);
+    try {
+      const data = await spSearch(query, token);
+      setResults(data);
+    } catch { onToast("Search failed", "error"); }
+    setSearching(false);
+  }
+
+  function fmtMs(ms) {
+    const s = Math.floor(ms/1000);
+    return `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
+  }
+
+  // ── NOT LOGGED IN ──────────────────────────────────────────────────────────
+  if (!token) return (
+    <div style={{marginTop:"1rem",background:"rgba(29,185,84,0.07)",border:"1px solid rgba(29,185,84,0.25)",borderRadius:"var(--r-lg)",padding:"1.2rem",textAlign:"center"}}>
+      <div style={{fontSize:"2rem",marginBottom:"0.5rem"}}>
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="#1DB954" style={{verticalAlign:"middle"}}><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>
+      </div>
+      <div style={{fontWeight:700,fontSize:"1rem",color:"#fff",marginBottom:"0.3rem"}}>Connect Spotify</div>
+      <div style={{fontSize:"0.8rem",color:"#888",marginBottom:"1rem"}}>Log in with Spotify to search & play any song while you study</div>
+      <button onClick={spLogin} style={{background:"#1DB954",border:"none",borderRadius:99,padding:"0.6rem 1.8rem",color:"#000",fontWeight:800,fontSize:"0.9rem",cursor:"pointer",display:"inline-flex",alignItems:"center",gap:"0.5rem",fontFamily:"'Bricolage Grotesque',sans-serif",letterSpacing:"0.02em"}}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>
+        Connect with Spotify
+      </button>
+      <div style={{fontSize:"0.7rem",color:"#555",marginTop:"0.75rem"}}>Requires Spotify Premium for playback · Free accounts can browse</div>
+    </div>
+  );
+
+  // ── NOT PREMIUM ────────────────────────────────────────────────────────────
+  if (isPremium === false) return (
+    <div style={{marginTop:"1rem",background:"rgba(255,255,255,0.04)",border:"1px solid var(--line2)",borderRadius:"var(--r-lg)",padding:"1.1rem"}}>
+      <div style={{display:"flex",alignItems:"center",gap:"0.6rem",marginBottom:"0.6rem"}}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="#1DB954"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>
+        <span style={{fontWeight:700,fontSize:"0.9rem",color:"#1DB954"}}>Spotify Connected</span>
+        <button onClick={()=>{ sessionStorage.removeItem("sp_token"); setToken(""); }} style={{marginLeft:"auto",background:"none",border:"1px solid #333",borderRadius:6,color:"#666",cursor:"pointer",fontSize:"0.7rem",padding:"0.2rem 0.5rem"}}>Disconnect</button>
+      </div>
+      <div style={{background:"rgba(255,165,0,0.1)",border:"1px solid rgba(255,165,0,0.3)",borderRadius:"var(--r)",padding:"0.75rem",fontSize:"0.82rem",color:"#ffb347"}}>
+        ⚠️ <strong>Spotify Premium required</strong> for in-browser playback. You can still search and tap tracks to open them in your Spotify app.
+      </div>
+      <SearchPanel token={token} onPlay={uri => window.open(`https://open.spotify.com/track/${uri.split(":")[2]}`, "_blank")} onPlayContext={uri => window.open(`https://open.spotify.com/playlist/${uri.split(":")[2]}`, "_blank")} query={query} setQuery={setQuery} results={results} setResults={setResults} searching={searching} doSearch={doSearch} fmtMs={fmtMs} premium={false} />
+    </div>
+  );
+
+  // ── PREMIUM — FULL PLAYER ──────────────────────────────────────────────────
+  return (
+    <div style={{marginTop:"1rem",background:"rgba(29,185,84,0.05)",border:"1px solid rgba(29,185,84,0.2)",borderRadius:"var(--r-lg)",padding:"1rem",display:"flex",flexDirection:"column",gap:"0.75rem"}}>
+
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"center",gap:"0.5rem"}}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="#1DB954"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>
+        <span style={{fontWeight:700,fontSize:"0.88rem",color:"#1DB954"}}>Spotify</span>
+        {!deviceId && <span style={{fontSize:"0.7rem",color:"#888",marginLeft:"0.3rem"}}>⏳ Connecting player…</span>}
+        <button onClick={()=>{ playerRef.current?.disconnect(); playerRef.current=null; sessionStorage.removeItem("sp_token"); setToken(""); }} style={{marginLeft:"auto",background:"none",border:"1px solid #333",borderRadius:6,color:"#666",cursor:"pointer",fontSize:"0.7rem",padding:"0.2rem 0.5rem"}}>Disconnect</button>
+      </div>
+
+      {/* Now Playing bar */}
+      {nowPlaying && (
+        <div style={{background:"rgba(0,0,0,0.35)",borderRadius:"var(--r)",padding:"0.65rem 0.85rem",display:"flex",flexDirection:"column",gap:"0.4rem"}}>
+          <div style={{display:"flex",alignItems:"center",gap:"0.7rem"}}>
+            {nowPlaying.album?.images?.[2]?.url && <img src={nowPlaying.album.images[2].url} style={{width:40,height:40,borderRadius:6,flexShrink:0}} alt="art" />}
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:700,fontSize:"0.84rem",color:"#fff",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{nowPlaying.name}</div>
+              <div style={{fontSize:"0.72rem",color:"#888"}}>{nowPlaying.artists?.map(a=>a.name).join(", ")}</div>
+            </div>
+            <div style={{fontSize:"0.7rem",color:"#666",flexShrink:0}}>{fmtMs(progress)} / {fmtMs(duration)}</div>
+          </div>
+          {/* Progress bar */}
+          <div style={{height:3,background:"#333",borderRadius:99,overflow:"hidden"}}>
+            <div style={{height:"100%",background:"#1DB954",width:`${duration?Math.round(progress/duration*100):0}%`,transition:"width 1s linear"}} />
+          </div>
+          {/* Controls */}
+          <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:"1rem"}}>
+            <button onClick={()=>playerRef.current?.previousTrack()} style={{background:"none",border:"none",color:"#aaa",cursor:"pointer",fontSize:"1.1rem",padding:"0.2rem"}}>⏮</button>
+            <button onClick={()=>playerRef.current?.togglePlay()} style={{background:"#1DB954",border:"none",borderRadius:"50%",width:36,height:36,color:"#000",cursor:"pointer",fontSize:"1rem",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>
+              {paused ? "▶" : "⏸"}
+            </button>
+            <button onClick={()=>playerRef.current?.nextTrack()} style={{background:"none",border:"none",color:"#aaa",cursor:"pointer",fontSize:"1.1rem",padding:"0.2rem"}}>⏭</button>
+            <input type="range" min={0} max={100} value={Math.round(volume*100)}
+              onChange={e=>{ const v=Number(e.target.value)/100; setVolume(v); playerRef.current?.setVolume(v); }}
+              style={{width:70,accentColor:"#1DB954",marginLeft:"0.5rem"}} />
+          </div>
+        </div>
+      )}
+
+      {/* Search */}
+      <SearchPanel token={token} onPlay={playTrack} onPlayContext={playContext} query={query} setQuery={setQuery} results={results} setResults={setResults} searching={searching} doSearch={doSearch} fmtMs={fmtMs} premium={true} />
+    </div>
+  );
+}
+
+// Search panel — shared by premium + free
+function SearchPanel({ token, onPlay, onPlayContext, query, setQuery, results, setResults, searching, doSearch, fmtMs, premium }) {
+  return (
+    <div>
+      {/* Search bar */}
+      <div style={{display:"flex",gap:"0.5rem",marginBottom:"0.6rem"}}>
+        <input
+          value={query}
+          onChange={e=>setQuery(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&doSearch()}
+          placeholder="Search songs, artists, playlists…"
+          style={{flex:1,background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:"var(--r-sm)",padding:"0.5rem 0.75rem",color:"var(--t1)",fontFamily:"'Instrument Sans',sans-serif",fontSize:"0.84rem",outline:"none"}}
+        />
+        <button onClick={doSearch} disabled={searching} style={{background:"#1DB954",border:"none",borderRadius:"var(--r-sm)",padding:"0.5rem 1rem",color:"#000",fontWeight:700,cursor:"pointer",fontSize:"0.82rem",flexShrink:0}}>
+          {searching ? "…" : "Search"}
+        </button>
+      </div>
+
+      {/* Results */}
+      {results && (
+        <div style={{display:"flex",flexDirection:"column",gap:"0.4rem",maxHeight:260,overflowY:"auto"}}>
+
+          {/* Tracks */}
+          {results.tracks?.items?.length > 0 && (
+            <>
+              <div style={{fontSize:"0.68rem",fontWeight:700,color:"#555",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:"0.2rem"}}>Tracks</div>
+              {results.tracks.items.map(t => (
+                <div key={t.id} onClick={()=>onPlay(t.uri)}
+                  style={{display:"flex",alignItems:"center",gap:"0.6rem",padding:"0.45rem 0.6rem",borderRadius:8,cursor:"pointer",background:"rgba(255,255,255,0.04)",transition:"background 0.15s"}}
+                  onMouseEnter={e=>e.currentTarget.style.background="rgba(29,185,84,0.12)"}
+                  onMouseLeave={e=>e.currentTarget.style.background="rgba(255,255,255,0.04)"}>
+                  {t.album?.images?.[2]?.url
+                    ? <img src={t.album.images[2].url} style={{width:36,height:36,borderRadius:4,flexShrink:0}} alt="" />
+                    : <div style={{width:36,height:36,borderRadius:4,background:"#333",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"0.9rem"}}>🎵</div>
+                  }
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:"0.82rem",fontWeight:600,color:"#fff",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.name}</div>
+                    <div style={{fontSize:"0.7rem",color:"#888"}}>{t.artists?.map(a=>a.name).join(", ")} · {t.album?.name}</div>
+                  </div>
+                  <div style={{fontSize:"0.7rem",color:"#555",flexShrink:0}}>{fmtMs(t.duration_ms)}</div>
+                  <div style={{fontSize:"0.8rem",color:"#1DB954",flexShrink:0}}>{premium?"▶":"↗"}</div>
+                </div>
+              ))}
+            </>
+          )}
+
+          {/* Playlists */}
+          {results.playlists?.items?.length > 0 && (
+            <>
+              <div style={{fontSize:"0.68rem",fontWeight:700,color:"#555",textTransform:"uppercase",letterSpacing:"0.5px",margin:"0.4rem 0 0.2rem"}}>Playlists</div>
+              {results.playlists.items.filter(Boolean).slice(0,4).map(pl => (
+                <div key={pl.id} onClick={()=>onPlayContext(pl.uri)}
+                  style={{display:"flex",alignItems:"center",gap:"0.6rem",padding:"0.45rem 0.6rem",borderRadius:8,cursor:"pointer",background:"rgba(255,255,255,0.04)",transition:"background 0.15s"}}
+                  onMouseEnter={e=>e.currentTarget.style.background="rgba(29,185,84,0.12)"}
+                  onMouseLeave={e=>e.currentTarget.style.background="rgba(255,255,255,0.04)"}>
+                  {pl.images?.[0]?.url
+                    ? <img src={pl.images[0].url} style={{width:36,height:36,borderRadius:4,flexShrink:0}} alt="" />
+                    : <div style={{width:36,height:36,borderRadius:4,background:"#333",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"0.9rem"}}>📋</div>
+                  }
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:"0.82rem",fontWeight:600,color:"#fff",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pl.name}</div>
+                    <div style={{fontSize:"0.7rem",color:"#888"}}>{pl.tracks?.total} tracks · {pl.owner?.display_name}</div>
+                  </div>
+                  <div style={{fontSize:"0.8rem",color:"#1DB954",flexShrink:0}}>{premium?"▶":"↗"}</div>
+                </div>
+              ))}
+            </>
+          )}
+
+          {/* Albums */}
+          {results.albums?.items?.length > 0 && (
+            <>
+              <div style={{fontSize:"0.68rem",fontWeight:700,color:"#555",textTransform:"uppercase",letterSpacing:"0.5px",margin:"0.4rem 0 0.2rem"}}>Albums</div>
+              {results.albums.items.slice(0,3).map(al => (
+                <div key={al.id} onClick={()=>onPlayContext(al.uri)}
+                  style={{display:"flex",alignItems:"center",gap:"0.6rem",padding:"0.45rem 0.6rem",borderRadius:8,cursor:"pointer",background:"rgba(255,255,255,0.04)",transition:"background 0.15s"}}
+                  onMouseEnter={e=>e.currentTarget.style.background="rgba(29,185,84,0.12)"}
+                  onMouseLeave={e=>e.currentTarget.style.background="rgba(255,255,255,0.04)"}>
+                  {al.images?.[2]?.url
+                    ? <img src={al.images[2].url} style={{width:36,height:36,borderRadius:4,flexShrink:0}} alt="" />
+                    : <div style={{width:36,height:36,borderRadius:4,background:"#333",flexShrink:0}} />
+                  }
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:"0.82rem",fontWeight:600,color:"#fff",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{al.name}</div>
+                    <div style={{fontSize:"0.7rem",color:"#888"}}>{al.artists?.map(a=>a.name).join(", ")} · {al.release_date?.slice(0,4)}</div>
+                  </div>
+                  <div style={{fontSize:"0.8rem",color:"#1DB954",flexShrink:0}}>{premium?"▶":"↗"}</div>
+                </div>
+              ))}
+            </>
+          )}
+
+          {!results.tracks?.items?.length && !results.playlists?.items?.length && !results.albums?.items?.length && (
+            <div style={{textAlign:"center",color:"#666",padding:"1rem",fontSize:"0.84rem"}}>No results found</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const PRESET_ROOMS = [
   { id:"r1", name:"Lo-Fi Focus Room",    emoji:"🎧", bg:"linear-gradient(135deg,#1e1b4b,#312e81)", subject:"General",        vibe:"Quiet focus + lo-fi beats" },
@@ -1692,8 +2042,7 @@ function StudyRooms({ user, onToast }) {
   const [chatInput, setChatInput] = useState("");
   const [micOn, setMicOn]         = useState(false);
   const [micErr, setMicErr]       = useState("");
-  const [spIdx, setSpIdx]         = useState(0);
-  const [spOpen, setSpOpen]       = useState(false);
+  // Spotify state handled inside SpotifyPlayer component
   const [pomSecs, setPomSecs]     = useState(25*60);
   const [pomOn, setPomOn]         = useState(false);
   const [pomMode, setPomMode]     = useState("focus");
@@ -1905,14 +2254,14 @@ function StudyRooms({ user, onToast }) {
     setActiveRoom(room);
     setMembers([]); setChat([{ id: 1, sys: true, text: `Welcome to ${room.name}! 🎯` }]);
     setPomSecs(25*60); setPomMode("focus"); setPomOn(false);
-    setSpOpen(false); setSpIdx(0); setMicErr("");
+    setMicErr("");
     setView("room");
   };
 
   const leaveRoom = () => {
     cleanupAll();
     setActiveRoom(null); setMembers([]); setChat([]);
-    setPomOn(false); setSpOpen(false); setMicOn(false);
+    setPomOn(false); setMicOn(false);
     setView("list");
   };
 
@@ -2146,49 +2495,7 @@ function StudyRooms({ user, onToast }) {
             </div>
 
             {/* ── Spotify Player ── */}
-            <div className="sp-wrap">
-
-              {/* Playlist chips */}
-              <div style={{display:"flex",gap:"0.3rem",flexWrap:"wrap",marginBottom:"0.7rem"}}>
-                {SPOTIFY_PLAYLISTS.map((pl,i) => (
-                  <button key={i}
-                    className={`sp-chip${spIdx===i && spOpen?" active":""}`}
-                    onClick={()=>{ setSpIdx(i); setSpOpen(true); }}>
-                    {pl.emoji} {pl.title}
-                  </button>
-                ))}
-              </div>
-
-              {/* Open button */}
-              {!spOpen && (
-                <button className="sp-open-btn" onClick={()=>setSpOpen(true)}>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="#1DB954"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>
-                  Open Spotify Player
-                </button>
-              )}
-
-              {/* Embedded Spotify iframe */}
-              {spOpen && (
-                <div className="sp-player-box">
-                  <iframe
-                    key={spIdx}
-                    src={`https://open.spotify.com/embed/playlist/${SPOTIFY_PLAYLISTS[spIdx].id}?utm_source=generator&theme=0`}
-                    width="100%"
-                    height="152"
-                    frameBorder="0"
-                    allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-                    loading="lazy"
-                    style={{display:"block"}}
-                  />
-                  <div className="sp-player-footer">
-                    <span className="sp-note">
-                      {SPOTIFY_PLAYLISTS[spIdx].emoji} {SPOTIFY_PLAYLISTS[spIdx].title} · {SPOTIFY_PLAYLISTS[spIdx].sub} · Full tracks with Spotify Premium
-                    </span>
-                    <button className="sp-close" onClick={()=>setSpOpen(false)}>✕ Close</button>
-                  </div>
-                </div>
-              )}
-            </div>
+            <SpotifyPlayer onToast={onToast} />
           </div>
         </div>
 
