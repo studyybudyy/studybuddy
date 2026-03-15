@@ -26,12 +26,11 @@ jobs:
       - name: Build
         run: npx vite build
 
-      - name: Check dist folder
-        run: |
-          echo "Contents of dist:"
-          ls -la dist/
-          echo "Contents of dist/assets:"
-          ls -la dist/assets/
+      - name: Show built index.html
+        run: cat dist/index.html
+
+      - name: Check dist assets
+        run: ls -la dist/assets/
 
       - name: Deploy to Firebase Hosting
         run: npx firebase-tools deploy --only hosting --token "${{ secrets.FIREBASE_TOKEN }}" --project studybuddy-ae87e --non-interactive
